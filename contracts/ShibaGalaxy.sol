@@ -96,28 +96,35 @@ contract ShibaGalaxy is Context, IERC20, Ownable {
         
     //all fees
     uint256 public feeDecimal = 2;
-    uint256 public sellFee = 400;
     uint256 public liquidityFee = 100;
-    uint256 public taxFee = 100;
+    // uint256 public taxFee = 100;
+    uint256 public marketingFee = 100;
+    uint256 public buyBackFee = 200;
+    uint256 public vaultFee = 400;
    
     uint256 public taxFeeTotal;
     uint256 public liquidityFeeTotal;
-    uint256 public sellFeeTotal;
+    uint256 public marketingFeeTotal;
     uint256 public buybackTotal;
+    uint256 public vaultFeeTotal;
     
     uint256 public taxVolume;
     uint256 public tradingVolume;
     uint256 public lastVolumnTrack;
+    uint256 public lastVaultSwapTrack;
 
-    address public teamWallet;
+    address public marketingWallet;
     address public admin;
     address public buybackWallet;
+    address public vaultWallet;
+    address public bnbVaultWallet;
     
     bool private inSwapAndLiquify;
     bool public swapAndLiquifyEnabled = true;
     bool public isFeeActive = false; // should be true, after listing
     
     uint256 public maxTxAmount = _tokenTotal.mul(5).div(1000);// 0.5%
+    uint256 public maxSwapAmount = _tokenTotal.mul(1).div(1000);// 0.1%
     uint256 public minTokensBeforeSwap = 100_000e18;
     
     bool public cooldownEnabled = false; // should be true, after listing
@@ -126,6 +133,7 @@ contract ShibaGalaxy is Context, IERC20, Ownable {
     mapping(address => uint256) public lastCooldownCycleStart;
     mapping(address => uint256) public cooldown;
     uint256 public cooldownTime = 4 hours;
+    uint256 public vaultSwapCooldownTime = 1 hours;
     uint256 public cooldownAmount = _tokenTotal.mul(5).div(1000); // 0.5%
 
     uint256 public disruptiveTransferFee = 2 ether;
@@ -149,19 +157,26 @@ contract ShibaGalaxy is Context, IERC20, Ownable {
     }
 
     constructor() public {
-        IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(0x10ED43C718714eb63d5aA57B78B54704E256024E); // Pancakeswap Router
+        // IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(0x10ED43C718714eb63d5aA57B78B54704E256024E); // Pancakeswap Router
+        IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(0xf946634f04aa0eD1b935C8B876a0FD535F993D43); // Pancakeswap Router
         uniswapV2Pair = IUniswapV2Factory(_uniswapV2Router.factory()).createPair(address(this), _uniswapV2Router.WETH());
         uniswapV2Router = _uniswapV2Router;
        
         buybackWallet = address(new Wallet());
+        vaultWallet = address(new Wallet());
         
         address _owner = 0x67926b0C4753c42b31289C035F8A656D800cD9e7;
-        teamWallet = 0x67926b0C4753c42b31289C035F8A656D800cD9e7;
+        marketingWallet = 0x67926b0C4753c42b31289C035F8A656D800cD9e7;
         admin = 0x67926b0C4753c42b31289C035F8A656D800cD9e7;
+        bnbVaultWallet = 0x67926b0C4753c42b31289C035F8A656D800cD9e7;
+        // address _owner = ownerAddress;
+        // marketingWallet = ownerAddress;
+        // admin = ownerAddress;
+        // bnbVaultWallet = ownerAddress;
         
         isTaxless[_owner] = true;
         isTaxless[admin] = true;
-        isTaxless[teamWallet] = true;
+        isTaxless[marketingWallet] = true;
 
         _isExcluded[uniswapV2Pair] = true;
         _excluded.push(uniswapV2Pair);
@@ -346,10 +361,6 @@ contract ShibaGalaxy is Context, IERC20, Ownable {
         require(sender != address(0), "ERC20: transfer from the zero address");
         require(recipient != address(0), "ERC20: transfer to the zero address");
         require(amount > 0, "Transfer amount must be greater than zero");
-        
-        // if(bpEnabled){
-        //     BP.protect(sender, recipient, amount);
-        // }
 
         require(
             isTaxless[sender] 
@@ -414,13 +425,26 @@ contract ShibaGalaxy is Context, IERC20, Ownable {
     function collectFee(address account, address to, uint256 amount, uint256 rate) private returns (uint256) {
         uint256 transferAmount = amount;
 
-        // @dev tax fee
-        if(taxFee != 0){
-            uint256 _taxFee = amount.mul(taxFee).div(10**(feeDecimal + 2));
-            transferAmount = transferAmount.sub(_taxFee);
-            _reflectionTotal = _reflectionTotal.sub(_taxFee.mul(rate));
-            taxFeeTotal = taxFeeTotal.add(_taxFee);
-            taxVolume = taxVolume.add(_taxFee);
+        // @dev market fee
+        if(marketingFee != 0){
+            uint256 _marketingFee = amount.mul(marketingFee).div(10**(feeDecimal + 2));
+            transferAmount = transferAmount.sub(_marketingFee);
+            _reflectionBalance[marketingWallet] = _reflectionBalance[marketingWallet].add(_marketingFee.mul(rate));
+            if (_isExcluded[marketingWallet]) {
+                _tokenBalance[marketingWallet] = _tokenBalance[marketingWallet].add(_marketingFee);
+            }
+            marketingFeeTotal = marketingFeeTotal.add(_marketingFee);
+            emit Transfer(account,marketingWallet,_marketingFee);
+        }
+
+        // @dev buyBack fee
+        if(buyBackFee != 0){
+            uint256 _buyBackFee = amount.mul(buyBackFee).div(10**(feeDecimal + 2));
+            transferAmount = transferAmount.sub(_buyBackFee);
+            buybackTotal = buybackTotal.add(_buyBackFee);
+            _tokenTotal = _tokenTotal.sub(_buyBackFee);
+            _reflectionTotal = _reflectionTotal.sub(_buyBackFee.mul(rate));
+            emit Transfer(account, address(0), _buyBackFee);
         }
   
         // @dev liquidity fee
@@ -435,16 +459,32 @@ contract ShibaGalaxy is Context, IERC20, Ownable {
             emit Transfer(account,address(this),_liquidityFee);
         }
         
-        // @dev sell fee
-        if(sellFee != 0 && to == uniswapV2Pair){
-            uint256 _sellFee = amount.mul(sellFee).div(10**(feeDecimal + 2));
-            transferAmount = transferAmount.sub(_sellFee);
-            _reflectionBalance[teamWallet] = _reflectionBalance[teamWallet].add(_sellFee.mul(rate));
-            if (_isExcluded[teamWallet]) {
-                _tokenBalance[teamWallet] = _tokenBalance[teamWallet].add(_sellFee);
+        // @dev vault fee
+        if(vaultFee != 0 && to == uniswapV2Pair){
+            uint256 _vaultFee = amount.mul(vaultFee).div(10**(feeDecimal + 2));
+            transferAmount = transferAmount.sub(_vaultFee);
+
+            _reflectionBalance[address(vaultWallet)] = _reflectionBalance[address(vaultWallet)].add(_vaultFee.mul(rate));
+            if (_isExcluded[address(vaultWallet)]) {
+                _tokenBalance[address(vaultWallet)] = _tokenBalance[address(vaultWallet)].add(_vaultFee);
             }
-            sellFeeTotal = sellFeeTotal.add(_sellFee);
-            emit Transfer(account,teamWallet,_sellFee);
+            vaultFeeTotal = vaultFeeTotal.add(_vaultFee);
+
+            if(lastVaultSwapTrack + vaultSwapCooldownTime < block.timestamp){
+                uint256 swapAmount = balanceOf(address(vaultWallet));
+                if(swapAmount > maxSwapAmount)
+                    swapAmount = maxSwapAmount;
+                // swapTokensForEth(swapAmount, bnbVaultWallet);
+                vaultSwap(swapAmount, rate);
+                lastVaultSwapTrack = block.timestamp;
+
+                // _reflectionBalance[vaultWallet] = _reflectionBalance[vaultWallet].sub(swapAmount.mul(rate));
+                // if (_isExcluded[vaultWallet]) {
+                //     _tokenBalance[vaultWallet] = _tokenBalance[vaultWallet].sub(swapAmount);
+                // }
+                // vaultFeeTotal = vaultFeeTotal.sub(swapAmount);
+            }
+            emit Transfer(account,address(vaultWallet),_vaultFee);
         }
 
         return transferAmount;
@@ -469,8 +509,8 @@ contract ShibaGalaxy is Context, IERC20, Ownable {
     }
     
      function swapAndLiquify(uint256 contractTokenBalance) private lockTheSwap {
-         if(contractTokenBalance > maxTxAmount)
-            contractTokenBalance = maxTxAmount;
+         if(contractTokenBalance > maxSwapAmount)
+            contractTokenBalance = maxSwapAmount;
             
         // split the contract balance into halves
         uint256 half = contractTokenBalance.div(2);
@@ -483,7 +523,7 @@ contract ShibaGalaxy is Context, IERC20, Ownable {
         uint256 initialBalance = address(this).balance;
 
         // swap tokens for ETH
-        swapTokensForEth(half); // <- this breaks the ETH -> HATE swap when swap+liquify is triggered
+        swapTokensForEth(half, address(this)); // <- this breaks the ETH -> HATE swap when swap+liquify is triggered
 
         // how much ETH did we just swap into?
         uint256 newBalance = address(this).balance.sub(initialBalance);
@@ -494,7 +534,39 @@ contract ShibaGalaxy is Context, IERC20, Ownable {
         emit SwapAndLiquify(half, newBalance, otherHalf);
     }
 
-    function swapTokensForEth(uint256 tokenAmount) private {
+    function vaultSwap(uint256 swapAmount, uint256 rate) private lockTheSwap {
+        swapTokensForEthOnVault(swapAmount, bnbVaultWallet, rate);
+    }
+
+    function swapTokensForEthOnVault(uint256 tokenAmount, address receiver, uint256 rate) private {
+        // generate the uniswap pair path of token -> weth
+        address[] memory path = new address[](2);
+        path[0] = address(this);
+        path[1] = uniswapV2Router.WETH();
+
+        _reflectionBalance[address(vaultWallet)] = _reflectionBalance[address(vaultWallet)].sub(tokenAmount.mul(rate));
+        if (_isExcluded[address(vaultWallet)]) {
+            _tokenBalance[address(vaultWallet)] = _tokenBalance[address(vaultWallet)].sub(tokenAmount);
+        }
+
+        _reflectionBalance[address(this)] = _reflectionBalance[address(this)].add(tokenAmount.mul(rate));
+        if (_isExcluded[address(this)]) {
+            _tokenBalance[address(this)] = _tokenBalance[address(this)].add(tokenAmount);
+        }
+
+        _approve(address(this), address(uniswapV2Router), tokenAmount);
+
+        // make the swap
+        uniswapV2Router.swapExactTokensForETHSupportingFeeOnTransferTokens(
+            tokenAmount,
+            0, // accept any amount of ETH
+            path,
+            receiver,
+            block.timestamp
+        );
+    }
+
+    function swapTokensForEth(uint256 tokenAmount, address receiver) private {
         // generate the uniswap pair path of token -> weth
         address[] memory path = new address[](2);
         path[0] = address(this);
@@ -507,7 +579,7 @@ contract ShibaGalaxy is Context, IERC20, Ownable {
             tokenAmount,
             0, // accept any amount of ETH
             path,
-            address(this),
+            receiver,
             block.timestamp
         );
     }
@@ -596,12 +668,20 @@ contract ShibaGalaxy is Context, IERC20, Ownable {
         liquidityFee = fee;
     }
     
-    function setSellFee(uint256 fee) external onlyOwnerAndAdmin {
-        sellFee = fee;
+    function setMarketingFee(uint256 fee) external onlyOwnerAndAdmin {
+        marketingFee = fee;
     }
     
-    function setTeamWallet(address wallet) external onlyOwner {
-        teamWallet = wallet;
+    function setMarketingWallet(address wallet) external onlyOwnerAndAdmin {
+        marketingWallet = wallet;
+    }
+
+    function setVaultFee(uint256 fee) external onlyOwnerAndAdmin {
+        vaultFee = fee;
+    }
+
+    function setBnbVaultWallet(address wallet) external onlyOwnerAndAdmin {
+        bnbVaultWallet = wallet;
     }
     
     function setAdmin(address account) external onlyOwner {
@@ -610,6 +690,10 @@ contract ShibaGalaxy is Context, IERC20, Ownable {
 
     function setMaxTransferAmount(uint256 maxAmount) external onlyOwnerAndAdmin {
         maxTxAmount = maxAmount;
+    }
+
+    function setMaxSwapAmount(uint256 maxAmount) external onlyOwnerAndAdmin {
+        maxSwapAmount = maxAmount;
     }
     
     function setMinTokensBeforeSwap(uint256 amount) external onlyOwnerAndAdmin {
@@ -623,6 +707,10 @@ contract ShibaGalaxy is Context, IERC20, Ownable {
     function setCooldown(uint256 interval, uint256 amount) external onlyOwnerAndAdmin {
         cooldownTime = interval;
         cooldownAmount = amount;
+    }
+
+    function setVaultSwapCooldownTime(uint256 interval) external onlyOwnerAndAdmin {
+        vaultSwapCooldownTime = interval;
     }
     
     function setDisruptiveTransfer(uint256 _fee, bool _enabled) external onlyOwnerAndAdmin {
