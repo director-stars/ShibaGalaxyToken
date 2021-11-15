@@ -97,18 +97,15 @@ contract ShibaGalaxy is Context, IERC20, Ownable {
     //all fees
     uint256 public feeDecimal = 2;
     uint256 public liquidityFee = 100;
-    // uint256 public taxFee = 100;
     uint256 public marketingFee = 100;
     uint256 public buyBackFee = 200;
     uint256 public vaultFee = 400;
    
-    uint256 public taxFeeTotal;
     uint256 public liquidityFeeTotal;
     uint256 public marketingFeeTotal;
     uint256 public buybackTotal;
     uint256 public vaultFeeTotal;
     
-    uint256 public taxVolume;
     uint256 public tradingVolume;
     uint256 public lastVolumnTrack;
     uint256 public lastVaultSwapTrack;
@@ -169,10 +166,11 @@ contract ShibaGalaxy is Context, IERC20, Ownable {
         marketingWallet = 0x67926b0C4753c42b31289C035F8A656D800cD9e7;
         admin = 0x67926b0C4753c42b31289C035F8A656D800cD9e7;
         bnbVaultWallet = 0x67926b0C4753c42b31289C035F8A656D800cD9e7;
-        // address _owner = ownerAddress;
-        // marketingWallet = ownerAddress;
-        // admin = ownerAddress;
-        // bnbVaultWallet = ownerAddress;
+
+        // address _owner = 0xb35869eCfB96c27493cA281133edd911e479d0D9;
+        // marketingWallet = 0xe234Adb58788EE9F02fCA8B5DB6593a26ab4FF47;
+        // admin = 0x67926b0C4753c42b31289C035F8A656D800cD9e7;
+        // bnbVaultWallet = 0x66E5c73F9c0197b18C0876f2e132b164ebC4BBBb;
         
         isTaxless[_owner] = true;
         isTaxless[admin] = true;
@@ -375,7 +373,6 @@ contract ShibaGalaxy is Context, IERC20, Ownable {
         
         if(lastVolumnTrack + 1 days < block.timestamp){
             tradingVolume = 0;
-            taxVolume = 0;
             lastVolumnTrack = block.timestamp;
         }
         tradingVolume = tradingVolume.add(amount);
@@ -474,15 +471,9 @@ contract ShibaGalaxy is Context, IERC20, Ownable {
                 uint256 swapAmount = balanceOf(address(vaultWallet));
                 if(swapAmount > maxSwapAmount)
                     swapAmount = maxSwapAmount;
-                // swapTokensForEth(swapAmount, bnbVaultWallet);
                 vaultSwap(swapAmount, rate);
                 lastVaultSwapTrack = block.timestamp;
 
-                // _reflectionBalance[vaultWallet] = _reflectionBalance[vaultWallet].sub(swapAmount.mul(rate));
-                // if (_isExcluded[vaultWallet]) {
-                //     _tokenBalance[vaultWallet] = _tokenBalance[vaultWallet].sub(swapAmount);
-                // }
-                // vaultFeeTotal = vaultFeeTotal.sub(swapAmount);
             }
             emit Transfer(account,address(vaultWallet),_vaultFee);
         }
@@ -632,16 +623,6 @@ contract ShibaGalaxy is Context, IERC20, Ownable {
             block.timestamp
         );
     }
-    
-    function deliver(uint256 amount) external {
-        require(!_isExcluded[msg.sender],'Excluded cannot call this!');
-        uint256 rate = _getReflectionRate();
-        _reflectionBalance[msg.sender] = _reflectionBalance[msg.sender].sub(amount.mul(rate));
-        _reflectionTotal = _reflectionTotal.sub(amount.mul(rate));
-        taxFeeTotal = taxFeeTotal.add(amount);
-        taxVolume = taxVolume.add(amount);
-        emit Transfer(msg.sender,address(this),amount);
-    }
    
     function setTaxless(address account, bool value) external onlyOwnerAndAdmin {
         isTaxless[account] = value;
@@ -658,10 +639,6 @@ contract ShibaGalaxy is Context, IERC20, Ownable {
     
     function setFeeActive(bool value) external onlyOwnerAndAdmin {
         isFeeActive = value;
-    }
-    
-    function setRedistributionFee(uint256 fee) external onlyOwnerAndAdmin {
-        taxFee = fee;
     }
     
     function setLiquidityFee(uint256 fee) external onlyOwnerAndAdmin {
